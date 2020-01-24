@@ -1,9 +1,9 @@
 
 /*
  *  Poly Synth for Arduino and Mozzi
- *  
+ *
  *  A simple mozzi synthesiser that supports polyphony.
- *  
+ *
  *  When limited by the maximum number of polyphony, the algorithm
  *  cuts the oldest sustained note and replaces it with a newly played
  *  note. The algorithm also prioritises bass notes to not be cut from
@@ -11,26 +11,27 @@
 
  *  Runs with Arduino MIDI Library.
  *  Added on top of Mozzi Exmple Mozzi_MIDI_Input.
- *  
+ *
  *  I've sent midi notes through the serial using hairless-midiserial tool.
  *  To use this in a normal way, delete the line where the serial begins
  *  on the port 115200.
- *  
+ *
  *  @jidagraphy
  */
- 
+
 #include <MIDI.h>
 #include <MozziGuts.h>
 #include <Oscil.h>
 #include <mozzi_midi.h>
 #include <ADSR.h>
-#include <tables/triangle_analogue512_int8.h>
+#include <tables/saw512_int8.h>
 
 #define CONTROL_RATE 256
 
 //set maximum number of polyphony
-#define MAX_POLY 4
+#define MAX_POLY 6
 #define OSC_NUM_CELLS 512
+#define WAVE_DATA SAW512_DATA
 
 //Envelope controllers
 #define ATTACK 22
@@ -38,7 +39,7 @@
 #define SUSTAIN 8000
 #define RELEASE 300
 #define ATTACK_LEVEL 64
-#define DECAY_LEVEL 2
+#define DECAY_LEVEL 0
 
 // audio oscillator
 Oscil<OSC_NUM_CELLS, AUDIO_RATE> osc[MAX_POLY];
@@ -59,7 +60,7 @@ byte bassFinger = 0;
 #define LED 13
 
 
-void HandleNoteOn(byte channel, byte note, byte velocity) { 
+void HandleNoteOn(byte channel, byte note, byte velocity) {
   if(pressed < MAX_POLY){
     for(unsigned int i = 0; i < MAX_POLY; i++){
       if(poly[i] == 0){
@@ -86,7 +87,7 @@ void HandleNoteOn(byte channel, byte note, byte velocity) {
     }else{
       int lowest = order;
       int oldestFinger = 0;
-      
+
       for(unsigned int i = 0; i < MAX_POLY; i++){
         if(orderArray[i] <= lowest && i != bassFinger){
           lowest = orderArray[i];
@@ -108,12 +109,12 @@ void HandleNoteOn(byte channel, byte note, byte velocity) {
 
 void HandleNoteOff(byte channel, byte note, byte velocity) {
   byte handsOffChecker = 0;
-  
+
   for(unsigned int i = 0; i < MAX_POLY; i++){
     if(note == poly[i]){
       env[i].noteOff();
       poly[i] = 0;
-      
+
       if(i == bassFinger){
         //if released note is the bass, find the next bass and reassign
         byte lowest = poly[0];
@@ -142,12 +143,12 @@ void HandleNoteOff(byte channel, byte note, byte velocity) {
 MIDI_CREATE_DEFAULT_INSTANCE();
 
 void setup() {
-  pinMode(LED, OUTPUT);  
+  pinMode(LED, OUTPUT);
 
   MIDI.setHandleNoteOn(HandleNoteOn);  // Put only the name of the function
   MIDI.setHandleNoteOff(HandleNoteOff);  // Put only the name of the function
   // Initiate MIDI communications, listen to all channels (not needed with Teensy usbMIDI)
-  MIDI.begin(MIDI_CHANNEL_OMNI);  
+  MIDI.begin(MIDI_CHANNEL_OMNI);
 
   //to use it with Hairless-midiserial
   Serial.begin(115200);
@@ -155,11 +156,11 @@ void setup() {
   for(unsigned int i = 0; i < MAX_POLY; i++){
     env[i].setADLevels(ATTACK_LEVEL,DECAY_LEVEL);
     env[i].setTimes(ATTACK,DECAY,SUSTAIN,RELEASE);
-    osc[i].setTable(TRIANGLE_ANALOGUE512_DATA);
+    osc[i].setTable(WAVE_DATA);
   }
-    
+
   //aSin0.setFreq(440); // default frequency
-  startMozzi(CONTROL_RATE); 
+  startMozzi(CONTROL_RATE);
 }
 
 
@@ -173,7 +174,7 @@ void updateControl(){
 
 int updateAudio(){
   int currentSample = 0;
-  
+
   for(unsigned int i = 0; i < MAX_POLY; i++){
     currentSample += env[i].next() * osc[i].next();
   }
@@ -183,6 +184,4 @@ int updateAudio(){
 
 void loop() {
   audioHook();
-} 
-
-
+}
