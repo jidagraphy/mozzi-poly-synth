@@ -1,21 +1,6 @@
 
 /*
- *  Poly Synth for Arduino and Mozzi
- *
- *  A simple mozzi synthesiser that supports polyphony.
- *
- *  When limited by the maximum number of polyphony, the algorithm
- *  cuts the oldest sustained note and replaces it with a newly played
- *  note. The algorithm also prioritises bass notes to not be cut from
- *  polyphony.
-
- *  Runs with Arduino MIDI Library.
- *  Added on top of Mozzi Exmple Mozzi_MIDI_Input.
- *
- *  I've sent midi notes through the serial using hairless-midiserial tool.
- *  To use this in a normal way, delete the line where the serial begins
- *  on the port 115200.
- *
+ *  Poly Synth for Arduino and Mozzi *
  *  @jidagraphy
  */
 
@@ -41,103 +26,77 @@
 #define ATTACK_LEVEL 64
 #define DECAY_LEVEL 0
 
-// audio oscillator
-Oscil<OSC_NUM_CELLS, AUDIO_RATE> osc[MAX_POLY];
+//Voices
+struct Voice{
+  Oscil<OSC_NUM_CELLS, AUDIO_RATE> osc;  // audio oscillator
+  ADSR<CONTROL_RATE, AUDIO_RATE> env;  // envelope generator
+  byte note = 0;
+  byte velocity = 0;
+};
 
-// envelope generator
-ADSR<CONTROL_RATE, AUDIO_RATE> env[MAX_POLY];
-
-//polyphonic notes
-byte poly[MAX_POLY] = {};
-
-//order of polyphony
-int pressed = 0;
-int orderArray[MAX_POLY] = {};
-int order = 0; //0 not pressed, order goes from 1 to MAX + 1
-byte bassFinger = 0;
+Voice voices[MAX_POLY];
 
 //optional midi monitor
 #define LED 13
 
 
 void HandleNoteOn(byte channel, byte note, byte velocity) {
-  if(pressed < MAX_POLY){
-    for(unsigned int i = 0; i < MAX_POLY; i++){
-      if(poly[i] == 0){
-        osc[i].setFreq(mtof(float(note)));
-        env[i].noteOn();
-        poly[i] = note;
-        order ++;
-        orderArray[i] = order;
-        if(poly[bassFinger] == 0 || note < poly[bassFinger]){
-          bassFinger = i;
-        }
-        break;
-      }
-    }
-  }else{
-    //bass sustainer - lowest note does not get effected by poly
-    //limit, unless the new note is lower than the lowest.
-    if(note < poly[bassFinger]){
-      //if lower, then reassign bass.
-      env[bassFinger].noteOff();
-      osc[bassFinger].setFreq(mtof(float(note)));
-      env[bassFinger].noteOn();
-      poly[bassFinger] = note;
-    }else{
-      int lowest = order;
-      int oldestFinger = 0;
+  if (velocity > 0) {
 
-      for(unsigned int i = 0; i < MAX_POLY; i++){
-        if(orderArray[i] <= lowest && i != bassFinger){
-          lowest = orderArray[i];
-          oldestFinger = i;
+    int activeVoice = 0;
+    int voiceToSteal = 0;
+    int lowestVelocity = 128;
+
+    for (unsigned int i = 0 ; i < MAX_POLY; i++) {
+      if(!voices[i].env.playing()){
+        voices[i].env.noteOff();
+        voices[i].osc.setFreq(mtof(float(note)));
+        voices[i].env.noteOn();
+        voices[i].note = note;
+        voices[i].velocity = velocity;
+        break;
+      }else{
+        activeVoice++;
+        if(lowestVelocity >= voices[i].velocity){
+          lowestVelocity = voices[i].velocity;
+          voiceToSteal = i;
         }
       }
-      env[oldestFinger].noteOff();
-      osc[oldestFinger].setFreq(mtof(float(note)));
-      env[oldestFinger].noteOn();
-      poly[oldestFinger] = note;
-      order++;
-      orderArray[oldestFinger] = order;
     }
+
+    if(activeVoice == MAX_POLY){
+        voices[voiceToSteal].env.noteOff();
+        voices[voiceToSteal].osc.setFreq(mtof(float(note)));
+        voices[voiceToSteal].env.noteOn();
+        voices[voiceToSteal].note = note;
+        voices[voiceToSteal].velocity = velocity;
+    }
+    digitalWrite(LED, HIGH);
+
+  } else {
+    usbMIDI.sendNoteOff(note, velocity, channel);
   }
-  pressed++;
-  digitalWrite(LED, HIGH);
 }
 
 
 void HandleNoteOff(byte channel, byte note, byte velocity) {
   byte handsOffChecker = 0;
-
-  for(unsigned int i = 0; i < MAX_POLY; i++){
-    if(note == poly[i]){
-      env[i].noteOff();
-      poly[i] = 0;
-
-      if(i == bassFinger){
-        //if released note is the bass, find the next bass and reassign
-        byte lowest = poly[0];
-
-        for(unsigned int j = 0; j < MAX_POLY; j++){
-          if((lowest == 0) || (poly[j] != 0 && poly[j] <= lowest)){
-            lowest = poly[j];
-            bassFinger = j;
-          }
-        }
-      }
-      orderArray[i] = 0;
+  for (unsigned int i = 0; i < MAX_POLY; i++) {
+    if (note == voices[i].note) {
+      voices[i].env.noteOff();
+      voices[i].note = 0;
+      voices[i].velocity = 0;
     }
-    handsOffChecker += poly[i];
+    handsOffChecker += voices[i].note;
   }
 
-//reset order counter if hands are off
-  if(handsOffChecker == 0){
-    order = 0;
-    bassFinger = 0;
+  if (handsOffChecker == 0) {
     digitalWrite(LED, LOW);
   }
-  pressed--;
+}
+
+void HandleControlChange(byte channel, byte control, byte value) {
+
 }
 
 MIDI_CREATE_DEFAULT_INSTANCE();
@@ -145,18 +104,18 @@ MIDI_CREATE_DEFAULT_INSTANCE();
 void setup() {
   pinMode(LED, OUTPUT);
 
-  MIDI.setHandleNoteOn(HandleNoteOn);  // Put only the name of the function
-  MIDI.setHandleNoteOff(HandleNoteOff);  // Put only the name of the function
+  usbMIDI.setHandleNoteOn(HandleNoteOn);  // Put only the name of the function
+  usbMIDI.setHandleNoteOff(HandleNoteOff);  // Put only the name of the function
   // Initiate MIDI communications, listen to all channels (not needed with Teensy usbMIDI)
-  MIDI.begin(MIDI_CHANNEL_OMNI);
+  // usbMIDI.begin(MIDI_CHANNEL_OMNI);
 
-  //to use it with Hairless-midiserial
-  Serial.begin(115200);
+  //to use it with Hairless-midiserial, uncomment below
+  // Serial.begin(115200);
 
   for(unsigned int i = 0; i < MAX_POLY; i++){
-    env[i].setADLevels(ATTACK_LEVEL,DECAY_LEVEL);
-    env[i].setTimes(ATTACK,DECAY,SUSTAIN,RELEASE);
-    osc[i].setTable(WAVE_DATA);
+    voices[i].env.setADLevels(ATTACK_LEVEL,DECAY_LEVEL);
+    voices[i].env.setTimes(ATTACK,DECAY,SUSTAIN,RELEASE);
+    voices[i].osc.setTable(WAVE_DATA);
   }
 
   //aSin0.setFreq(440); // default frequency
@@ -165,9 +124,9 @@ void setup() {
 
 
 void updateControl(){
-  MIDI.read();
+  usbMIDI.read();
   for(unsigned int i = 0; i < MAX_POLY; i++){
-    env[i].update();
+    voices[i].env.update();
   }
 }
 
@@ -176,7 +135,7 @@ int updateAudio(){
   int currentSample = 0;
 
   for(unsigned int i = 0; i < MAX_POLY; i++){
-    currentSample += env[i].next() * osc[i].next();
+    currentSample += voices[i].env.next() * voices[i].osc.next();
   }
   return (int) (currentSample)>>8;
 }
